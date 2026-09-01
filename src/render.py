@@ -5,7 +5,14 @@ import time
 from jinja2.sandbox import SandboxedEnvironment
 from loguru import logger
 from playwright._impl._errors import TargetClosedError
-from playwright.async_api import Browser, BrowserContext, Playwright, async_playwright
+from playwright.async_api import (
+    Browser,
+    BrowserContext,
+    Page,
+    Playwright,
+    TimeoutError as PlaywrightTimeoutError,
+    async_playwright,
+)
 from pydantic import BaseModel
 from typing import Literal
 from typing_extensions import TypedDict
@@ -65,6 +72,13 @@ class ScreenshotOptions(BaseModel):
             - normal: 1.0
             - high: 1.3
             - ultra: 1.8
+        navigation_wait_until: (Literal["commit", "domcontentloaded", "load", "networkidle"], optional):
+            页面导航完成条件，仅 URL 截图需要配置.
+        wait_after_load: (float, optional): 导航完成后额外等待的毫秒数.
+        wait_for_selector: (str, optional): 截图前等待出现的 CSS 选择器.
+        auto_scroll: (bool, optional): 是否自动滚动页面以触发懒加载内容.
+        wait_for_network_idle: (bool, optional): 是否等待页面网络进入空闲状态.
+        wait_for_images: (bool, optional): 是否等待页面中的图片完成加载.
 
     @author: Redlnn(https://github.com/GraiaCommunity/graiax-text2img-playwright)
     """
@@ -81,6 +95,14 @@ class ScreenshotOptions(BaseModel):
     viewport_width: int | None = None
     viewport_height: int | None = None
     device_scale_factor_level: Literal["normal", "high", "ultra", None] = None
+    navigation_wait_until: Literal[
+        "commit", "domcontentloaded", "load", "networkidle", None
+    ] = None
+    wait_after_load: float | None = None
+    wait_for_selector: str | None = None
+    auto_scroll: bool | None = None
+    wait_for_network_idle: bool | None = None
+    wait_for_images: bool | None = None
 
 
 class Text2ImgRender:
@@ -237,6 +259,55 @@ class Text2ImgRender:
         """Navigate to an HTTP(S) URL and capture it as an image."""
         return await self._page2pic(url, screenshot_options)
 
+    async def _wait_for_dynamic_content(
+        self, page: Page, screenshot_options: ScreenshotOptions
+    ) -> None:
+        if screenshot_options.wait_for_selector:
+            await page.wait_for_selector(
+                screenshot_options.wait_for_selector,
+                timeout=screenshot_options.timeout,
+            )
+
+        if screenshot_options.wait_after_load:
+            await page.wait_for_timeout(screenshot_options.wait_after_load)
+
+        if screenshot_options.auto_scroll:
+            await page.evaluate(
+                """
+                async () => {
+                    const delay = 50;
+                    const maxSteps = 100;
+                    for (let step = 0; step < maxSteps; step += 1) {
+                        const viewport = Math.max(window.innerHeight, 1);
+                        const bottom = window.scrollY + viewport;
+                        const height = document.documentElement.scrollHeight;
+                        if (bottom >= height) break;
+                        window.scrollBy(0, Math.max(Math.floor(viewport * 0.8), 1));
+                        await new Promise((resolve) => setTimeout(resolve, delay));
+                    }
+                    window.scrollTo(0, 0);
+                }
+                """
+            )
+
+        # Dynamic pages often keep polling indefinitely. Treat network idle and
+        # individual image completion as best-effort waits with a bounded timeout.
+        wait_timeout = min(screenshot_options.timeout or 10_000, 10_000)
+        if screenshot_options.wait_for_network_idle:
+            try:
+                await page.wait_for_load_state("networkidle", timeout=wait_timeout)
+            except PlaywrightTimeoutError:
+                logger.debug("URL page did not reach network idle before screenshot")
+
+        if screenshot_options.wait_for_images:
+            try:
+                await page.wait_for_function(
+                    "() => Array.from(document.images).every((img) => img.complete)",
+                    timeout=wait_timeout,
+                )
+            except PlaywrightTimeoutError:
+                logger.debug("Some URL page images were still loading before screenshot")
+
     async def _page2pic(
         self,
         target: str,
@@ -292,11 +363,27 @@ class Text2ImgRender:
             logger.info(f"page2pic: set viewport size to {width}x{height}")
 
             try:
-                await page.goto(target, timeout=screenshot_options.timeout)
+                await page.goto(
+                    target,
+                    timeout=screenshot_options.timeout,
+                    wait_until=screenshot_options.navigation_wait_until or "load",
+                )
+                if html_file_path is None:
+                    await self._wait_for_dynamic_content(page, screenshot_options)
+
                 screenshot_kwargs = screenshot_options.model_dump(exclude_none=True)
-                screenshot_kwargs.pop("viewport_width", None)
-                screenshot_kwargs.pop("viewport_height", None)
-                screenshot_kwargs.pop("device_scale_factor_level", None)
+                for option_name in (
+                    "viewport_width",
+                    "viewport_height",
+                    "device_scale_factor_level",
+                    "navigation_wait_until",
+                    "wait_after_load",
+                    "wait_for_selector",
+                    "auto_scroll",
+                    "wait_for_network_idle",
+                    "wait_for_images",
+                ):
+                    screenshot_kwargs.pop(option_name, None)
 
                 # Robustness: Remove quality if type is png, as Playwright errors out
                 if screenshot_options.type == "png":

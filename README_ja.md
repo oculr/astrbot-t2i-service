@@ -89,6 +89,27 @@ URLモードではページの `<meta name="viewport">` からビューポート
 - `str` url: 必須。`http://` または `https://` URLのみ対応
 - `bool` json: JSON形式の画像IDを返すかどうか。デフォルトは `false`
 - `dict` `optional` options: `/text2img/generate` と同じスクリーンショット設定
+  - `navigation_wait_until`: ナビゲーション完了条件。デフォルトは `load`、`networkidle` も指定可能
+  - `wait_after_load`: ナビゲーション完了後の追加待機時間（ミリ秒）。URLモードのデフォルトは `1000`
+  - `wait_for_selector`: スクリーンショット前に待機するCSSセレクター
+  - `auto_scroll`: 遅延読み込みを開始するための自動スクロール。URLモードのデフォルトは `true`
+  - `wait_for_network_idle`: ネットワークのアイドル状態を待機。URLモードのデフォルトは `true`
+  - `wait_for_images`: ページ内画像の読み込み完了を待機。URLモードのデフォルトは `true`
+
+動的な読み込みが続くページでは、待機時間を増やすか、準備完了を示す要素を指定します。
+
+```json
+{
+  "url": "https://example.com/dynamic-page",
+  "options": {
+    "wait_after_load": 3000,
+    "wait_for_selector": ".page-ready",
+    "auto_scroll": true,
+    "wait_for_network_idle": true,
+    "wait_for_images": true
+  }
+}
+```
 
 JSONモードで返された `data/{id}` は `GET /url2img/data/{id}` から取得できます。
 

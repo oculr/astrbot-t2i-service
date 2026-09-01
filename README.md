@@ -89,6 +89,28 @@ page's `<meta name="viewport">`; the default is 800×720 when none are supplied.
 - `str` url: Required; only `http://` and `https://` URLs are accepted
 - `bool` json: Whether to return a JSON image id, default is `false`
 - `dict` `optional` options: Screenshot options, identical to `/text2img/generate`
+  - `navigation_wait_until`: Navigation readiness condition; defaults to `load` and may be set to `networkidle`
+  - `wait_after_load`: Additional delay in milliseconds; defaults to `1000` for URL rendering
+  - `wait_for_selector`: CSS selector to wait for before taking the screenshot
+  - `auto_scroll`: Automatically scroll to trigger lazy loading; defaults to `true` for URL rendering
+  - `wait_for_network_idle`: Wait for network idle; defaults to `true` for URL rendering
+  - `wait_for_images`: Wait for page images to finish loading; defaults to `true` for URL rendering
+
+For pages that continue loading dynamically, increase the delay or wait for a
+page-specific ready element:
+
+```json
+{
+  "url": "https://example.com/dynamic-page",
+  "options": {
+    "wait_after_load": 3000,
+    "wait_for_selector": ".page-ready",
+    "auto_scroll": true,
+    "wait_for_network_idle": true,
+    "wait_for_images": true
+  }
+}
+```
 
 In JSON mode, retrieve the returned `data/{id}` from `GET /url2img/data/{id}`.
 

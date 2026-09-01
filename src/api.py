@@ -121,6 +121,23 @@ def default_screenshot_options() -> ScreenshotOptions:
     )
 
 
+def url_screenshot_options(options: ScreenshotOptions | None) -> ScreenshotOptions:
+    resolved = options or default_screenshot_options()
+    dynamic_defaults = {
+        "navigation_wait_until": "load",
+        "wait_after_load": 1_000,
+        "auto_scroll": True,
+        "wait_for_network_idle": True,
+        "wait_for_images": True,
+    }
+    updates = {
+        name: value
+        for name, value in dynamic_defaults.items()
+        if getattr(resolved, name) is None
+    }
+    return resolved.model_copy(update=updates)
+
+
 async def image_response(pic: str, is_json_return: bool) -> Response:
     media_type = "image/png" if pic.endswith(".png") else "image/jpeg"
 
@@ -320,7 +337,7 @@ async def url2img(request: UrlGenerateRequest):
             headers={"Retry-After": str(retry_after)},
         )
 
-    options = request.options or default_screenshot_options()
+    options = url_screenshot_options(request.options)
     pic = await render.url2pic(str(request.url), options)
     return await image_response(pic, request.json)
 

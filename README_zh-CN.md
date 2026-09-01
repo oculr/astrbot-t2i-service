@@ -86,6 +86,27 @@ html 转 img
 - `str` url: 必填，只支持 `http://` 或 `https://` URL
 - `bool` json: 是否返回 JSON 格式的图片 ID，默认为 `false`
 - `dict` `optional` options: 截图参数，与 `/text2img/generate` 相同
+  - `navigation_wait_until`: 导航完成条件，默认为 `load`，可设为 `networkidle`
+  - `wait_after_load`: 导航完成后额外等待的毫秒数，URL 模式默认为 `1000`
+  - `wait_for_selector`: 截图前等待出现的 CSS 选择器
+  - `auto_scroll`: 自动滚动以触发懒加载，URL 模式默认为 `true`
+  - `wait_for_network_idle`: 等待网络空闲，URL 模式默认为 `true`
+  - `wait_for_images`: 等待页面图片完成加载，URL 模式默认为 `true`
+
+对于持续加载的动态页面，可增加等待时间或指定页面就绪元素：
+
+```json
+{
+  "url": "https://example.com/dynamic-page",
+  "options": {
+    "wait_after_load": 3000,
+    "wait_for_selector": ".page-ready",
+    "auto_scroll": true,
+    "wait_for_network_idle": true,
+    "wait_for_images": true
+  }
+}
+```
 
 JSON 模式返回的 `data/{id}` 可通过 `GET /url2img/data/{id}` 获取。
 

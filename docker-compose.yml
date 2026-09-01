@@ -1,0 +1,22 @@
+services:
+  astrbot-t2i-service:
+    image: ocul/astrbot-t2i-service:latest
+    restart: unless-stopped
+    init: true
+    ports:
+      - "8999:8999"
+    environment:
+      PORT: "8999"
+      IMAGE_LIFETIME_HOURS: "24"
+      STORAGE_BACKEND: local
+    volumes:
+      - t2i-data:/app/data
+    networks:
+      - t2i-network
+
+networks:
+  t2i-network:
+    driver: bridge
+
+volumes:
+  t2i-data:

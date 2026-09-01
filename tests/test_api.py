@@ -104,6 +104,11 @@ def test_url_generate_returns_image(tmp_path, monkeypatch):
     assert renderer.requested_url == "https://example.com/page"
     assert renderer.requested_options.type == "png"
     assert renderer.requested_options.full_page is True
+    assert renderer.requested_options.navigation_wait_until == "load"
+    assert renderer.requested_options.wait_after_load == 1000
+    assert renderer.requested_options.auto_scroll is True
+    assert renderer.requested_options.wait_for_network_idle is True
+    assert renderer.requested_options.wait_for_images is True
 
 
 def test_url_generate_supports_json_response(tmp_path, monkeypatch):
@@ -127,7 +132,35 @@ def test_url_generate_supports_json_response(tmp_path, monkeypatch):
     assert json.loads(response.body)["data"] == {"id": "data/rendered_test.png"}
     assert renderer.requested_url == "http://localhost:3000/preview"
     assert renderer.requested_options.viewport_width == 1200
+    assert renderer.requested_options.auto_scroll is True
     assert storage.saved_path == str(output_path)
+
+
+def test_url_generate_can_disable_dynamic_page_waits(tmp_path, monkeypatch):
+    output_path = tmp_path / "url_render.png"
+    renderer = FakeRenderer(output_path)
+    monkeypatch.setattr(api, "render", renderer)
+
+    asyncio.run(
+        api.url2img(
+            api.UrlGenerateRequest(
+                url="https://example.com",
+                options=api.ScreenshotOptions(
+                    navigation_wait_until="domcontentloaded",
+                    wait_after_load=250,
+                    auto_scroll=False,
+                    wait_for_network_idle=False,
+                    wait_for_images=False,
+                ),
+            )
+        )
+    )
+
+    assert renderer.requested_options.navigation_wait_until == "domcontentloaded"
+    assert renderer.requested_options.wait_after_load == 250
+    assert renderer.requested_options.auto_scroll is False
+    assert renderer.requested_options.wait_for_network_idle is False
+    assert renderer.requested_options.wait_for_images is False
 
 
 def test_url_generate_rejects_non_http_url():
