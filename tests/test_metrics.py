@@ -13,6 +13,8 @@ def test_metric_route_never_uses_image_ids():
         "/text2img/data/{id}"
     )
     assert api.metric_route("/not-found/some-random-value") == "unmatched"
+    assert api.metric_route("/url2img/generate") == "/url2img/generate"
+    assert api.metric_route("/url2img/data/image.png") == "/url2img/data/{id}"
 
 
 def make_request(authorization: str = "") -> Request:

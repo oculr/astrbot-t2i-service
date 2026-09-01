@@ -225,6 +225,24 @@ class Text2ImgRender:
     async def html2pic(
         self, html_file_path: str, screenshot_options: ScreenshotOptions
     ) -> str:
+        return await self._page2pic(
+            f"file://{html_file_path}",
+            screenshot_options,
+            html_file_path=html_file_path,
+        )
+
+    async def url2pic(
+        self, url: str, screenshot_options: ScreenshotOptions
+    ) -> str:
+        """Navigate to an HTTP(S) URL and capture it as an image."""
+        return await self._page2pic(url, screenshot_options)
+
+    async def _page2pic(
+        self,
+        target: str,
+        screenshot_options: ScreenshotOptions,
+        html_file_path: str | None = None,
+    ) -> str:
         # Determine which context to use based on device_scale_factor_level
         level = screenshot_options.device_scale_factor_level or "normal"
         suffix = screenshot_options.type if screenshot_options.type else "png"
@@ -241,7 +259,7 @@ class Text2ImgRender:
             except TargetClosedError as e:
                 BROWSER_RESTARTS.labels(reason="target_closed").inc()
                 logger.warning(
-                    f"html2pic: Failed to create new page, restarting browser context: {e}"
+                    f"page2pic: Failed to create new page, restarting browser context: {e}"
                 )
                 # Close and remove the specific context, then recreate it
                 if level in self.contexts:
@@ -255,9 +273,13 @@ class Text2ImgRender:
                 page = await context.new_page()
             RENDER_ACTIVE_PAGES.inc()
 
-            viewport_width, viewport_height = self._resolve_viewport_size(
-                html_file_path, screenshot_options
-            )
+            if html_file_path is not None:
+                viewport_width, viewport_height = self._resolve_viewport_size(
+                    html_file_path, screenshot_options
+                )
+            else:
+                viewport_width = screenshot_options.viewport_width
+                viewport_height = screenshot_options.viewport_height
 
             width = viewport_width if viewport_width is not None else 800
             height = viewport_height if viewport_height is not None else 720
@@ -267,12 +289,10 @@ class Text2ImgRender:
             )
             # Always set viewport size to ensure defaults are applied
             await page.set_viewport_size({"width": width, "height": height})
-            logger.info(f"html2pic: set viewport size to {width}x{height}")
+            logger.info(f"page2pic: set viewport size to {width}x{height}")
 
             try:
-                await page.goto(
-                    f"file://{html_file_path}", timeout=screenshot_options.timeout
-                )
+                await page.goto(target, timeout=screenshot_options.timeout)
                 screenshot_kwargs = screenshot_options.model_dump(exclude_none=True)
                 screenshot_kwargs.pop("viewport_width", None)
                 screenshot_kwargs.pop("viewport_height", None)
@@ -293,7 +313,7 @@ class Text2ImgRender:
                 os.path.getsize(result_path)
             )
             result = "success"
-            logger.info(f"Rendered {html_file_path} to {result_path}")
+            logger.info(f"Rendered {target} to {result_path}")
             return result_path
         finally:
             if page is not None:

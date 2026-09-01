@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from jinja2.exceptions import SecurityError
 from loguru import logger
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from pydantic import BaseModel
+from pydantic import AnyHttpUrl, BaseModel
 
 from .metrics import (
     CLEANUP_DURATION,
@@ -48,8 +48,11 @@ rate_limit_window_seconds = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "0"))
 def metric_route(path: str) -> str:
     if path.startswith("/text2img/data/"):
         return "/text2img/data/{id}"
+    if path.startswith("/url2img/data/"):
+        return "/url2img/data/{id}"
     if path in {
         "/text2img/generate",
+        "/url2img/generate",
         "/metrics",
         "/docs",
         "/redoc",
@@ -93,6 +96,63 @@ class GenerateRequest(BaseModel):
     tmpldata: dict | None = None
     options: ScreenshotOptions | None = None
     json: bool = False
+
+
+class UrlGenerateRequest(BaseModel):
+    url: AnyHttpUrl
+    options: ScreenshotOptions | None = None
+    json: bool = False
+
+
+def default_screenshot_options() -> ScreenshotOptions:
+    return ScreenshotOptions(
+        timeout=None,
+        type="png",
+        quality=None,
+        omit_background=None,
+        full_page=True,
+        clip=None,
+        animations=None,
+        caret=None,
+        scale="device",
+        viewport_width=None,
+        viewport_height=None,
+        device_scale_factor_level=None,
+    )
+
+
+async def image_response(pic: str, is_json_return: bool) -> Response:
+    media_type = "image/png" if pic.endswith(".png") else "image/jpeg"
+
+    if not is_json_return:
+        return FileResponse(pic, media_type=media_type)
+
+    started = time.perf_counter()
+    try:
+        image_id = await image_storage.save(pic)
+    except Exception:
+        IMAGE_STORAGE_OPERATIONS.labels(operation="save", result="error").inc()
+        logger.exception("Failed to persist rendered image")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "code": 1,
+                "message": "image storage error",
+                "data": {},
+            },
+        )
+    finally:
+        IMAGE_STORAGE_DURATION.labels(operation="save").observe(
+            time.perf_counter() - started
+        )
+    IMAGE_STORAGE_OPERATIONS.labels(operation="save", result="success").inc()
+    return JSONResponse(
+        content={
+            "code": 0,
+            "message": "success",
+            "data": {"id": f"data/{image_id}"},
+        },
+    )
 
 
 # 启动时创建清理任务
@@ -160,6 +220,7 @@ async def prometheus_metrics(request: fastapi.Request):
     )
 
 
+@app.get("/url2img/data/{id}")
 @app.get("/text2img/data/{id}")
 async def text2img_image(id: str):
     started = time.perf_counter()
@@ -241,58 +302,27 @@ async def text2img(request: GenerateRequest):
             status_code=400,
             content={"code": 1, "message": "html or tmpl not found", "data": {}},
         )
-    options = (
-        request.options
-        if request.options
-        else ScreenshotOptions(
-            timeout=None,
-            type="png",
-            quality=None,
-            omit_background=None,
-            full_page=True,
-            clip=None,
-            animations=None,
-            caret=None,
-            scale="device",
-            viewport_width=None,
-            viewport_height=None,
-            device_scale_factor_level=None,
-        )
-    )
+    options = request.options or default_screenshot_options()
 
     pic = await render.html2pic(abs_path, options)
+    return await image_response(pic, is_json_return)
 
-    media_type = "image/png" if pic.endswith(".png") else "image/jpeg"
 
-    if is_json_return:
-        started = time.perf_counter()
-        try:
-            image_id = await image_storage.save(pic)
-        except Exception:
-            IMAGE_STORAGE_OPERATIONS.labels(operation="save", result="error").inc()
-            logger.exception("Failed to persist rendered image")
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "code": 1,
-                    "message": "image storage error",
-                    "data": {},
-                },
-            )
-        finally:
-            IMAGE_STORAGE_DURATION.labels(operation="save").observe(
-                time.perf_counter() - started
-            )
-        IMAGE_STORAGE_OPERATIONS.labels(operation="save", result="success").inc()
+@app.post("/url2img/generate")
+async def url2img(request: UrlGenerateRequest):
+    """Navigate to a URL and return a screenshot of the rendered page."""
+    retry_after = await enforce_rate_limit()
+    if retry_after is not None:
+        RATE_LIMIT_REJECTIONS.inc()
         return JSONResponse(
-            content={
-                "code": 0,
-                "message": "success",
-                "data": {"id": f"data/{image_id}"},
-            },
+            status_code=429,
+            content={"code": 1, "message": "rate limit exceeded", "data": {}},
+            headers={"Retry-After": str(retry_after)},
         )
-    else:
-        return FileResponse(pic, media_type=media_type)
+
+    options = request.options or default_screenshot_options()
+    pic = await render.url2pic(str(request.url), options)
+    return await image_response(pic, request.json)
 
 
 if __name__ == "__main__":

@@ -65,6 +65,30 @@ html 转 img
       - `high`: 设备像素比 1.3
       - `ultra`: 设备像素比 1.8
 
+### POST /url2img/generate
+
+访问 HTTP/HTTPS URL，并将渲染后的页面直接转换为图片。支持与
+`/text2img/generate` 相同的 `options` 和 `json` 参数；URL 模式不会从页面的
+`<meta name="viewport">` 推断视口大小，未指定时使用 800×720。
+
+```json
+{
+  "url": "https://example.com",
+  "json": false,
+  "options": {
+    "full_page": true,
+    "viewport_width": 1200,
+    "viewport_height": 800
+  }
+}
+```
+
+- `str` url: 必填，只支持 `http://` 或 `https://` URL
+- `bool` json: 是否返回 JSON 格式的图片 ID，默认为 `false`
+- `dict` `optional` options: 截图参数，与 `/text2img/generate` 相同
+
+JSON 模式返回的 `data/{id}` 可通过 `GET /url2img/data/{id}` 获取。
+
 ### GET /text2img/data/{id}
 
-根据 id 返回对应的图像。
+根据 id 返回对应的图像。`GET /url2img/data/{id}` 是功能相同的别名。

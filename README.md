@@ -67,6 +67,31 @@ Convert HTML to image
     - `high`: Device pixel ratio 1.3
     - `ultra`: Device pixel ratio 1.8
 
+### POST /url2img/generate
+
+Navigate to an HTTP/HTTPS URL and convert the rendered page directly to an image.
+This endpoint supports the same `options` and `json` fields as
+`/text2img/generate`. URL rendering does not infer viewport dimensions from a
+page's `<meta name="viewport">`; the default is 800×720 when none are supplied.
+
+```json
+{
+  "url": "https://example.com",
+  "json": false,
+  "options": {
+    "full_page": true,
+    "viewport_width": 1200,
+    "viewport_height": 800
+  }
+}
+```
+
+- `str` url: Required; only `http://` and `https://` URLs are accepted
+- `bool` json: Whether to return a JSON image id, default is `false`
+- `dict` `optional` options: Screenshot options, identical to `/text2img/generate`
+
+In JSON mode, retrieve the returned `data/{id}` from `GET /url2img/data/{id}`.
+
 ### GET /text2img/data/{id}
 
-Returns the corresponding image by id.
+Returns the corresponding image by id. `GET /url2img/data/{id}` is an equivalent alias.

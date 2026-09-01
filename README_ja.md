@@ -67,6 +67,31 @@ HTMLを画像に変換
       - `high`: デバイスピクセル比 1.3
       - `ultra`: デバイスピクセル比 1.8
 
+### POST /url2img/generate
+
+HTTP/HTTPS URLにアクセスし、レンダリングされたページを直接画像に変換します。
+`/text2img/generate` と同じ `options` および `json` フィールドを使用できます。
+URLモードではページの `<meta name="viewport">` からビューポートサイズを推測せず、
+未指定の場合は800×720を使用します。
+
+```json
+{
+  "url": "https://example.com",
+  "json": false,
+  "options": {
+    "full_page": true,
+    "viewport_width": 1200,
+    "viewport_height": 800
+  }
+}
+```
+
+- `str` url: 必須。`http://` または `https://` URLのみ対応
+- `bool` json: JSON形式の画像IDを返すかどうか。デフォルトは `false`
+- `dict` `optional` options: `/text2img/generate` と同じスクリーンショット設定
+
+JSONモードで返された `data/{id}` は `GET /url2img/data/{id}` から取得できます。
+
 ### GET /text2img/data/{id}
 
-idに対応する画像を返します。
+idに対応する画像を返します。`GET /url2img/data/{id}` は同じ機能のエイリアスです。
