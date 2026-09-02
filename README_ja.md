@@ -4,13 +4,20 @@
 
 ## 機能
 
-HTMLやテンプレートを画像に変換するシンプルなWebサービスで、画像のライフサイクル管理をサポートしています。
+HTML、URL、またはホストした静的サイトを画像に変換し、画像のライフサイクル管理をサポートするWebサービスです。
 
 ## 環境変数設定
 
 - `PORT`: サービスポート、デフォルトは8999
 - `IMAGE_LIFETIME_HOURS`: 画像の保持時間（時間単位）、デフォルトは24時間。この時間を超えた画像ファイルは自動的にクリーンアップされます
 - `STORAGE_BACKEND`: 画像ストレージバックエンド。`local`（デフォルト）、`s3`、`r2`をサポートします
+- `WEB_ROOT`: ホストするWebサイトの保存先。デフォルトは `data/websites`
+- `WEB_PUBLIC_URL_PREFIX`: 返却するWebサイトURLの外部アクセスプレフィックス。未設定時は現在のリクエスト元を使用
+- `WEB_INTERNAL_URL_PREFIX`: Playwrightがコンテナ内からアクセスするURL。デフォルトは `http://127.0.0.1:${PORT}`
+- `WEB_MAX_ARCHIVE_BYTES`: ZIPアップロード上限。デフォルトは100 MiB
+- `WEB_MAX_SITE_BYTES`: 展開またはGit取得後のサイトサイズ上限。デフォルトは500 MiB
+- `WEB_MAX_SITE_FILES`: 1サイトのファイル数上限。デフォルトは10000
+- `WEB_GIT_TIMEOUT_SECONDS`: Git shallow cloneのタイムアウト。デフォルトは120秒
 
 ### Cloudflare R2 / S3互換オブジェクトストレージ
 
@@ -112,6 +119,70 @@ URLモードではページの `<meta name="viewport">` からビューポート
 ```
 
 JSONモードで返された `data/{id}` は `GET /url2img/data/{id}` から取得できます。
+
+### POST /websites/import/git
+
+HTTP/HTTPS Gitリポジトリから静的サイトをshallow cloneします。リポジトリにはブラウザで
+直接表示できる成果物が必要です。React/Vueなどのソースでは、コミット済みの `dist` または
+`build` を `subdirectory` に指定します。
+
+```json
+{
+  "repository_url": "https://github.com/example/static-site.git",
+  "ref": "main",
+  "subdirectory": "dist"
+}
+```
+
+### POST /websites/import/zip
+
+`multipart/form-data` でオフラインZIPをアップロードします。
+
+- `file`: 必須のZIPファイル
+- `subdirectory`: ZIP内の静的ビルドディレクトリ（任意）
+
+どちらの方法でも選択先に `index.html` が必要です。成功レスポンス例：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "id": "0123456789abcdef0123456789abcdef",
+    "path": "/websites/0123456789abcdef0123456789abcdef/",
+    "url": "https://t2i.example.com/websites/0123456789abcdef0123456789abcdef/"
+  }
+}
+```
+
+ZIPではパストラバーサル、シンボリックリンク、暗号化エントリ、上限超過を拒否します。
+Git URLに認証情報を埋め込むことはできません。
+
+### GET /websites/{id}/{path}
+
+ホストしたサイトを配信します。ディレクトリは `index.html` を返し、拡張子のない未知の
+パスはSPAルーティング用にルートの `index.html` へフォールバックします。
+
+ビルド成果物では相対アセットパスを使用するか、返却された `/websites/{id}/` をbaseに
+設定してください。ホストされたJavaScriptは閲覧者のブラウザで実行されます。信頼できない
+アップロードを受け付ける場合は、`WEB_PUBLIC_URL_PREFIX` に別オリジンを使用し、
+リバースプロキシで認証、リクエストサイズ制限、アクセスポリシーを設定してください。
+
+### POST /websites/{id}/generate
+
+Playwrightでホストしたサイトまたはサブページを撮影します。`/url2img/generate` と同じ
+動的ページ待機とスクリーンショット設定を使用できます。
+
+```json
+{
+  "path": "dashboard?theme=dark",
+  "json": false,
+  "options": {
+    "viewport_width": 1200,
+    "wait_for_selector": ".page-ready"
+  }
+}
+```
 
 ### GET /text2img/data/{id}
 

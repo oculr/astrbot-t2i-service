@@ -9,6 +9,8 @@ services:
       PORT: "8999"
       IMAGE_LIFETIME_HOURS: "24"
       STORAGE_BACKEND: local
+      WEB_PUBLIC_URL_PREFIX: ${WEB_PUBLIC_URL_PREFIX:-http://localhost:8999}
+      WEB_INTERNAL_URL_PREFIX: http://127.0.0.1:8999
     volumes:
       - t2i-data:/app/data
     networks:

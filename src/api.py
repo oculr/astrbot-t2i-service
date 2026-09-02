@@ -3,10 +3,13 @@ import os
 import secrets
 import time
 from collections import deque
+from pathlib import PurePosixPath
+from urllib.parse import quote, urlsplit
 
 import fastapi
+from fastapi import File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from jinja2.exceptions import SecurityError
 from loguru import logger
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -28,6 +31,7 @@ from .metrics import (
 from .render import ScreenshotOptions, Text2ImgRender
 from .storage import create_image_storage
 from .util import cleanup_expired_files
+from .websites import WebsiteImportError, WebsiteManager, WebsiteTooLargeError
 
 app = fastapi.FastAPI()
 app.add_middleware(
@@ -39,6 +43,7 @@ app.add_middleware(
 )
 render = Text2ImgRender()
 image_storage = create_image_storage()
+website_manager = WebsiteManager()
 rate_limit_lock = asyncio.Lock()
 rate_limit_timestamps: deque[float] = deque()
 rate_limit_max_requests = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "0"))
@@ -50,6 +55,12 @@ def metric_route(path: str) -> str:
         return "/text2img/data/{id}"
     if path.startswith("/url2img/data/"):
         return "/url2img/data/{id}"
+    if path in {"/websites/import/git", "/websites/import/zip"}:
+        return path
+    if path.startswith("/websites/"):
+        if path.endswith("/generate"):
+            return "/websites/{id}/generate"
+        return "/websites/{id}/{path}"
     if path in {
         "/text2img/generate",
         "/url2img/generate",
@@ -104,6 +115,18 @@ class UrlGenerateRequest(BaseModel):
     json: bool = False
 
 
+class GitWebsiteRequest(BaseModel):
+    repository_url: AnyHttpUrl
+    ref: str | None = None
+    subdirectory: str | None = None
+
+
+class WebsiteGenerateRequest(BaseModel):
+    path: str = ""
+    options: ScreenshotOptions | None = None
+    json: bool = False
+
+
 def default_screenshot_options() -> ScreenshotOptions:
     return ScreenshotOptions(
         timeout=None,
@@ -138,7 +161,11 @@ def url_screenshot_options(options: ScreenshotOptions | None) -> ScreenshotOptio
     return resolved.model_copy(update=updates)
 
 
-async def image_response(pic: str, is_json_return: bool) -> Response:
+async def image_response(
+    pic: str,
+    is_json_return: bool,
+    image_path_prefix: str = "data",
+) -> Response:
     media_type = "image/png" if pic.endswith(".png") else "image/jpeg"
 
     if not is_json_return:
@@ -167,9 +194,53 @@ async def image_response(pic: str, is_json_return: bool) -> Response:
         content={
             "code": 0,
             "message": "success",
-            "data": {"id": f"data/{image_id}"},
+            "data": {"id": f"{image_path_prefix.rstrip('/')}/{image_id}"},
         },
     )
+
+
+def website_response(site_id: str, request: fastapi.Request) -> JSONResponse:
+    path, url = website_manager.public_location(
+        site_id,
+        fallback_prefix=str(request.base_url).rstrip("/"),
+    )
+    return JSONResponse(
+        content={
+            "code": 0,
+            "message": "success",
+            "data": {"id": site_id, "path": path, "url": url},
+        }
+    )
+
+
+def website_import_error(error: WebsiteImportError) -> JSONResponse:
+    status_code = 413 if isinstance(error, WebsiteTooLargeError) else 400
+    return JSONResponse(
+        status_code=status_code,
+        content={"code": 1, "message": str(error), "data": {}},
+    )
+
+
+def website_internal_url(site_id: str, page_path: str) -> str:
+    parsed = urlsplit(page_path)
+    normalized_path = PurePosixPath(parsed.path.replace("\\", "/"))
+    if (
+        parsed.scheme
+        or parsed.netloc
+        or ".." in normalized_path.parts
+        or any(character in page_path for character in "\r\n\0")
+    ):
+        raise ValueError("invalid website page path")
+
+    port = os.getenv("PORT", "8999")
+    prefix = os.getenv(
+        "WEB_INTERNAL_URL_PREFIX", f"http://127.0.0.1:{port}"
+    ).rstrip("/")
+    relative_path = quote(parsed.path.lstrip("/"), safe="/-._~")
+    target = f"{prefix}/websites/{site_id}/{relative_path}"
+    if parsed.query:
+        target = f"{target}?{parsed.query}"
+    return target
 
 
 # 启动时创建清理任务
@@ -265,6 +336,113 @@ async def text2img_image(id: str):
     if image.path is not None:
         return FileResponse(image.path, media_type=image.media_type)
     return Response(content=image.content, media_type=image.media_type)
+
+
+@app.post("/websites/import/git")
+async def import_website_from_git(
+    request: fastapi.Request,
+    payload: GitWebsiteRequest,
+):
+    retry_after = await enforce_rate_limit()
+    if retry_after is not None:
+        RATE_LIMIT_REJECTIONS.inc()
+        return JSONResponse(
+            status_code=429,
+            content={"code": 1, "message": "rate limit exceeded", "data": {}},
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    try:
+        site = await website_manager.import_git(
+            str(payload.repository_url),
+            ref=payload.ref,
+            subdirectory=payload.subdirectory,
+        )
+    except WebsiteImportError as error:
+        return website_import_error(error)
+    return website_response(site.site_id, request)
+
+
+@app.post("/websites/import/zip")
+async def import_website_from_zip(
+    request: fastapi.Request,
+    file: UploadFile = File(...),
+    subdirectory: str | None = Form(None),
+):
+    retry_after = await enforce_rate_limit()
+    if retry_after is not None:
+        RATE_LIMIT_REJECTIONS.inc()
+        await file.close()
+        return JSONResponse(
+            status_code=429,
+            content={"code": 1, "message": "rate limit exceeded", "data": {}},
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    try:
+        site = await website_manager.import_zip(file, subdirectory=subdirectory)
+    except WebsiteImportError as error:
+        return website_import_error(error)
+    return website_response(site.site_id, request)
+
+
+@app.get("/websites/{site_id}", include_in_schema=False)
+async def hosted_website_redirect(site_id: str):
+    if not website_manager.site_exists(site_id):
+        return JSONResponse(
+            status_code=404,
+            content={"code": 1, "message": "website not found", "data": {}},
+        )
+    return RedirectResponse(url=f"/websites/{site_id}/")
+
+
+@app.get("/websites/{site_id}/")
+@app.get("/websites/{site_id}/{file_path:path}")
+async def hosted_website(site_id: str, file_path: str = ""):
+    file = website_manager.resolve_file(site_id, file_path)
+    if file is None:
+        return JSONResponse(
+            status_code=404,
+            content={"code": 1, "message": "website file not found", "data": {}},
+        )
+    return FileResponse(file, media_type=website_manager.media_type(file))
+
+
+@app.post("/websites/{site_id}/generate")
+async def generate_website_image(
+    site_id: str,
+    request: WebsiteGenerateRequest,
+):
+    if not website_manager.site_exists(site_id):
+        return JSONResponse(
+            status_code=404,
+            content={"code": 1, "message": "website not found", "data": {}},
+        )
+
+    retry_after = await enforce_rate_limit()
+    if retry_after is not None:
+        RATE_LIMIT_REJECTIONS.inc()
+        return JSONResponse(
+            status_code=429,
+            content={"code": 1, "message": "rate limit exceeded", "data": {}},
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    try:
+        target = website_internal_url(site_id, request.path)
+    except ValueError as error:
+        return JSONResponse(
+            status_code=400,
+            content={"code": 1, "message": str(error), "data": {}},
+        )
+
+    options = url_screenshot_options(request.options)
+    pic = await render.url2pic(target, options)
+    return await image_response(
+        pic,
+        request.json,
+        image_path_prefix="/text2img/data",
+    )
 
 
 @app.post("/text2img/generate")

@@ -171,3 +171,51 @@ def test_url_generate_rejects_non_http_url():
 def test_url_image_data_route_is_registered():
     paths = {route.path for route in api.app.routes}
     assert "/url2img/data/{id}" in paths
+
+
+class FakeWebsiteManager:
+    def site_exists(self, site_id):
+        return site_id == "a" * 32
+
+
+def test_hosted_website_generate_uses_internal_url(tmp_path, monkeypatch):
+    output_path = tmp_path / "website.png"
+    renderer = FakeRenderer(output_path)
+    monkeypatch.setattr(api, "render", renderer)
+    monkeypatch.setattr(api, "website_manager", FakeWebsiteManager())
+    monkeypatch.setenv("WEB_INTERNAL_URL_PREFIX", "http://t2i:8999")
+
+    response = asyncio.run(
+        api.generate_website_image(
+            "a" * 32,
+            api.WebsiteGenerateRequest(path="dashboard?theme=dark"),
+        )
+    )
+
+    assert response.status_code == 200
+    assert renderer.requested_url == (
+        f"http://t2i:8999/websites/{'a' * 32}/dashboard?theme=dark"
+    )
+    assert renderer.requested_options.auto_scroll is True
+
+
+def test_hosted_website_generate_rejects_unsafe_path(monkeypatch):
+    monkeypatch.setattr(api, "website_manager", FakeWebsiteManager())
+
+    response = asyncio.run(
+        api.generate_website_image(
+            "a" * 32,
+            api.WebsiteGenerateRequest(path="../private"),
+        )
+    )
+
+    assert response.status_code == 400
+    assert json.loads(response.body)["message"] == "invalid website page path"
+
+
+def test_hosted_website_routes_are_registered():
+    paths = {route.path for route in api.app.routes}
+    assert "/websites/import/git" in paths
+    assert "/websites/import/zip" in paths
+    assert "/websites/{site_id}/{file_path:path}" in paths
+    assert "/websites/{site_id}/generate" in paths

@@ -5,3 +5,4 @@ uvicorn
 jinja2
 loguru
 boto3
+python-multipart>=0.0.18

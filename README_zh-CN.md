@@ -4,13 +4,20 @@
 
 ## 功能
 
-一个简单的将 HTML/模板转换为图片的 Web 服务，支持图片生命周期管理。
+一个将 HTML、URL 或托管静态网站转换为图片的 Web 服务，支持图片生命周期管理。
 
 ## 环境变量配置
 
 - `PORT`: 服务端口，默认 8999
 - `IMAGE_LIFETIME_HOURS`: 图片生命时间（小时），默认 24 小时。超过此时间的图片文件将被自动清理
 - `STORAGE_BACKEND`: 图片存储后端，支持 `local`（默认）、`s3` 和 `r2`
+- `WEB_ROOT`: 托管网站存储目录，默认 `data/websites`
+- `WEB_PUBLIC_URL_PREFIX`: 返回网站完整 URL 时使用的外部访问前缀；未设置时使用当前请求地址
+- `WEB_INTERNAL_URL_PREFIX`: Playwright 在容器内访问托管网站的地址，默认 `http://127.0.0.1:${PORT}`
+- `WEB_MAX_ARCHIVE_BYTES`: ZIP 上传大小上限，默认 100 MiB
+- `WEB_MAX_SITE_BYTES`: 解压后或 Git 导入后的网站大小上限，默认 500 MiB
+- `WEB_MAX_SITE_FILES`: 单个网站文件数量上限，默认 10000
+- `WEB_GIT_TIMEOUT_SECONDS`: Git 浅克隆超时，默认 120 秒
 
 ### Cloudflare R2 / S3 兼容对象存储
 
@@ -109,6 +116,67 @@ html 转 img
 ```
 
 JSON 模式返回的 `data/{id}` 可通过 `GET /url2img/data/{id}` 获取。
+
+### POST /websites/import/git
+
+从 HTTP/HTTPS Git 仓库浅克隆静态网站。仓库必须包含可直接浏览的构建产物；
+对于 React/Vue 等源码仓库，通过 `subdirectory` 指向已经提交的 `dist` 或 `build`。
+
+```json
+{
+  "repository_url": "https://github.com/example/static-site.git",
+  "ref": "main",
+  "subdirectory": "dist"
+}
+```
+
+### POST /websites/import/zip
+
+使用 `multipart/form-data` 上传离线 ZIP 包：
+
+- `file`: 必填的 ZIP 文件
+- `subdirectory`: 可选，指定压缩包内的静态构建目录
+
+ZIP 和 Git 导入都会要求目标目录存在 `index.html`。成功响应示例：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "id": "0123456789abcdef0123456789abcdef",
+    "path": "/websites/0123456789abcdef0123456789abcdef/",
+    "url": "https://t2i.example.com/websites/0123456789abcdef0123456789abcdef/"
+  }
+}
+```
+
+ZIP 导入会阻止路径穿越、符号链接、加密条目和超限内容；Git URL 不允许内嵌凭据。
+
+### GET /websites/{id}/{path}
+
+访问已托管的网站资源。目录默认返回 `index.html`；没有扩展名的未知路径会回退到
+根目录 `index.html`，支持前端 SPA 路由。
+
+前端构建产物应使用相对资源路径，或将构建 base 配置为返回的 `/websites/{id}/`。
+托管页面会执行其中的 JavaScript；接收不可信用户上传时，建议使用独立域名作为
+`WEB_PUBLIC_URL_PREFIX`，并在反向代理层配置身份验证、上传大小限制和访问策略。
+
+### POST /websites/{id}/generate
+
+使用 Playwright 截取已托管网站或其子页面，支持与 `/url2img/generate` 相同的动态
+页面等待和截图参数。
+
+```json
+{
+  "path": "dashboard?theme=dark",
+  "json": false,
+  "options": {
+    "viewport_width": 1200,
+    "wait_for_selector": ".page-ready"
+  }
+}
+```
 
 ### GET /text2img/data/{id}
 

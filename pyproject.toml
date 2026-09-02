@@ -1,6 +1,6 @@
 [project]
 name = "astrbot-t2i-service"
-version = "0.1.1"
+version = "0.1.2"
 description = "A text-to-image rendering service using FastAPI and Playwright."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -11,11 +11,13 @@ dependencies = [
     "loguru>=0.7.3",
     "playwright>=1.54.0",
     "prometheus-client>=0.22.1",
+    "python-multipart>=0.0.18",
     "uvicorn>=0.35.0",
 ]
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "pytest>=8.4.1",
 ]
 

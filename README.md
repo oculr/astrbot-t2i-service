@@ -4,13 +4,20 @@
 
 ## Features
 
-A simple web service that converts HTML/templates to images, with image lifecycle management support.
+A web service that converts HTML, URLs, or hosted static websites to images, with image lifecycle management support.
 
 ## Environment Variables
 
 - `PORT`: Service port, default is 8999
 - `IMAGE_LIFETIME_HOURS`: Image lifetime in hours, default is 24 hours. Images older than this will be automatically cleaned up
 - `STORAGE_BACKEND`: Image storage backend. Supports `local` (default), `s3`, and `r2`
+- `WEB_ROOT`: Hosted website storage directory, default is `data/websites`
+- `WEB_PUBLIC_URL_PREFIX`: External prefix used in returned website URLs; falls back to the current request origin
+- `WEB_INTERNAL_URL_PREFIX`: Address Playwright uses inside the container, default is `http://127.0.0.1:${PORT}`
+- `WEB_MAX_ARCHIVE_BYTES`: ZIP upload limit, default is 100 MiB
+- `WEB_MAX_SITE_BYTES`: Extracted or cloned website size limit, default is 500 MiB
+- `WEB_MAX_SITE_FILES`: File limit per website, default is 10000
+- `WEB_GIT_TIMEOUT_SECONDS`: Shallow Git clone timeout, default is 120 seconds
 
 ### Cloudflare R2 / S3-compatible object storage
 
@@ -113,6 +120,70 @@ page-specific ready element:
 ```
 
 In JSON mode, retrieve the returned `data/{id}` from `GET /url2img/data/{id}`.
+
+### POST /websites/import/git
+
+Shallow-clone a static website from an HTTP/HTTPS Git repository. The repository
+must contain browser-ready output. For React/Vue source repositories, set
+`subdirectory` to a committed `dist` or `build` directory.
+
+```json
+{
+  "repository_url": "https://github.com/example/static-site.git",
+  "ref": "main",
+  "subdirectory": "dist"
+}
+```
+
+### POST /websites/import/zip
+
+Upload an offline ZIP with `multipart/form-data`:
+
+- `file`: Required ZIP file
+- `subdirectory`: Optional static build directory inside the archive
+
+Both import methods require `index.html` in the selected directory. Example response:
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "id": "0123456789abcdef0123456789abcdef",
+    "path": "/websites/0123456789abcdef0123456789abcdef/",
+    "url": "https://t2i.example.com/websites/0123456789abcdef0123456789abcdef/"
+  }
+}
+```
+
+ZIP imports reject path traversal, symbolic links, encrypted entries, and content
+over the configured limits. Git URLs may not contain embedded credentials.
+
+### GET /websites/{id}/{path}
+
+Serve a hosted website. Directories resolve to `index.html`; extensionless missing
+paths fall back to the root `index.html` for SPA routing.
+
+Build output should use relative asset paths or configure its base path to the
+returned `/websites/{id}/`. Hosted JavaScript executes in the visitor's browser.
+For untrusted uploads, use a separate origin for `WEB_PUBLIC_URL_PREFIX` and apply
+authentication, request-size limits, and access policy at the reverse proxy.
+
+### POST /websites/{id}/generate
+
+Capture a hosted website or subpage with Playwright. It accepts the same dynamic
+page readiness and screenshot options as `/url2img/generate`.
+
+```json
+{
+  "path": "dashboard?theme=dark",
+  "json": false,
+  "options": {
+    "viewport_width": 1200,
+    "wait_for_selector": ".page-ready"
+  }
+}
+```
 
 ### GET /text2img/data/{id}
 
