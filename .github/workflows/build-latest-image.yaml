@@ -1,16 +1,15 @@
 name: Release Docker Image
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'Dockerfile'
-      - 'docker-compose.yml'
-      - 'src/**'
-      - '.github/workflows/build-latest-image.yaml'
-      - 'main.py'
+  release:
+    types:
+      - published
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Docker image tag
+        required: false
+        default: latest
 
 env:
   IMAGE_NAME: ocul/astrbot-t2i-service
@@ -24,6 +23,8 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.release.tag_name || github.ref }}
 
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v3
@@ -43,4 +44,6 @@ jobs:
         context: .
         platforms: linux/amd64,linux/arm64
         push: true
-        tags: ${{ env.IMAGE_NAME }}:latest
+        tags: |
+          ${{ env.IMAGE_NAME }}:${{ github.event.release.tag_name || inputs.tag || 'latest' }}
+          ${{ env.IMAGE_NAME }}:latest

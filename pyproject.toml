@@ -1,6 +1,6 @@
 [project]
 name = "astrbot-t2i-service"
-version = "0.1.2"
+version = "0.1.3"
 description = "A text-to-image rendering service using FastAPI and Playwright."
 readme = "README.md"
 requires-python = ">=3.11"
