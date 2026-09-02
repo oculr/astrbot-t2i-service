@@ -6,6 +6,118 @@
 
 A web service that converts HTML, URLs, or hosted static websites to images, with image lifecycle management support.
 
+## Installation and usage
+
+### Option 1: Docker Compose (recommended)
+
+Install Docker and Docker Compose v2, then run:
+
+```bash
+git clone https://github.com/oculr/astrbot-t2i-service.git
+cd astrbot-t2i-service
+docker compose pull
+docker compose up -d
+```
+
+The service listens on `http://localhost:8999`. Interactive API documentation is
+available at `http://localhost:8999/docs`.
+
+Inspect status and logs:
+
+```bash
+docker compose ps
+docker compose logs -f astrbot-t2i-service
+```
+
+For a domain or reverse-proxy deployment, create `.env` in the project directory:
+
+```env
+WEB_PUBLIC_URL_PREFIX=https://t2i.example.com
+```
+
+Compose substitutes this value into `docker-compose.yml`. Add any other required
+variables to the Compose service's `environment` section, then run `docker compose up -d`.
+
+### Option 2: Run the Docker image directly
+
+```bash
+docker run -d \
+  --name astrbot-t2i-service \
+  --restart unless-stopped \
+  --init \
+  -p 8999:8999 \
+  -e WEB_PUBLIC_URL_PREFIX=http://localhost:8999 \
+  -v astrbot-t2i-data:/app/data \
+  ocul/astrbot-t2i-service:latest
+```
+
+For production, replace `latest` with a fixed Release tag and set
+`WEB_PUBLIC_URL_PREFIX` to the real externally accessible origin.
+
+### Option 3: Run from source
+
+This requires Python 3.11 or newer, Git, and Chromium system dependencies. Using
+`uv` is recommended:
+
+```bash
+git clone https://github.com/oculr/astrbot-t2i-service.git
+cd astrbot-t2i-service
+uv sync
+uv run playwright install --with-deps chromium
+uv run python main.py
+```
+
+Alternatively, use a standard virtual environment:
+
+```bash
+python -m venv .venv
+# Linux/macOS: source .venv/bin/activate
+# Windows PowerShell: .venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+playwright install chromium
+python main.py
+```
+
+### Quick verification
+
+Verify OpenAPI access:
+
+```bash
+curl http://localhost:8999/openapi.json
+```
+
+Generate a first image:
+
+```bash
+curl -X POST http://localhost:8999/text2img/generate \
+  -H "Content-Type: application/json" \
+  -d '{"html":"<html><body><h1>Hello T2I</h1></body></html>"}' \
+  --output hello.png
+```
+
+Capture a web page:
+
+```bash
+curl -X POST http://localhost:8999/url2img/generate \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com"}' \
+  --output example.png
+```
+
+### Updating and stopping
+
+```bash
+# Update to the latest image
+docker compose pull
+docker compose up -d
+
+# Remove containers while preserving the data volume
+docker compose down
+```
+
+Hosted websites and local images are stored in the `t2i-data` volume. Running
+`docker compose down -v` also deletes that volume and cannot be undone.
+
 ## Environment Variables
 
 - `PORT`: Service port, default is 8999

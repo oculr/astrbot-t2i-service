@@ -6,6 +6,124 @@
 
 一个将 HTML、URL 或托管静态网站转换为图片的 Web 服务，支持图片生命周期管理。
 
+## 安装与使用
+
+### 方法一：Docker Compose（推荐）
+
+需要安装 Docker 和 Docker Compose v2。
+
+```bash
+git clone https://github.com/oculr/astrbot-t2i-service.git
+cd astrbot-t2i-service
+docker compose pull
+docker compose up -d
+```
+
+服务启动后监听 `http://localhost:8999`，交互式 API 文档位于：
+
+```text
+http://localhost:8999/docs
+```
+
+查看状态和日志：
+
+```bash
+docker compose ps
+docker compose logs -f astrbot-t2i-service
+```
+
+如果服务通过域名或反向代理对外提供，请在项目目录创建 `.env`：
+
+```env
+WEB_PUBLIC_URL_PREFIX=https://t2i.example.com
+```
+
+Compose 会用它替换 `docker-compose.yml` 中的外部 URL。其它环境变量可按需加入
+`docker-compose.yml` 的 `environment`。修改配置后执行：
+
+```bash
+docker compose up -d
+```
+
+### 方法二：直接运行 Docker 镜像
+
+```bash
+docker run -d \
+  --name astrbot-t2i-service \
+  --restart unless-stopped \
+  --init \
+  -p 8999:8999 \
+  -e WEB_PUBLIC_URL_PREFIX=http://localhost:8999 \
+  -v astrbot-t2i-data:/app/data \
+  ocul/astrbot-t2i-service:latest
+```
+
+生产环境建议将 `latest` 替换为固定 Release 标签，并将
+`WEB_PUBLIC_URL_PREFIX` 设置为真实外部地址。
+
+### 方法三：从源码运行
+
+需要 Python 3.11 或更高版本、Git，以及 Chromium 所需的系统依赖。推荐使用 `uv`：
+
+```bash
+git clone https://github.com/oculr/astrbot-t2i-service.git
+cd astrbot-t2i-service
+uv sync
+uv run playwright install --with-deps chromium
+uv run python main.py
+```
+
+也可以使用标准虚拟环境：
+
+```bash
+python -m venv .venv
+# Linux/macOS: source .venv/bin/activate
+# Windows PowerShell: .venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+playwright install chromium
+python main.py
+```
+
+### 快速验证
+
+确认 OpenAPI 可访问：
+
+```bash
+curl http://localhost:8999/openapi.json
+```
+
+生成第一张图片：
+
+```bash
+curl -X POST http://localhost:8999/text2img/generate \
+  -H "Content-Type: application/json" \
+  -d '{"html":"<html><body><h1>Hello T2I</h1></body></html>"}' \
+  --output hello.png
+```
+
+截取网页：
+
+```bash
+curl -X POST http://localhost:8999/url2img/generate \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com"}' \
+  --output example.png
+```
+
+### 更新与停止
+
+```bash
+# 更新到最新镜像
+docker compose pull
+docker compose up -d
+
+# 停止并删除容器，保留数据卷
+docker compose down
+```
+
+站点和本地图片保存在 `t2i-data` 卷中。只有明确执行 `docker compose down -v` 才会
+同时删除该数据卷；删除后数据无法恢复。
+
 ## 环境变量配置
 
 - `PORT`: 服务端口，默认 8999

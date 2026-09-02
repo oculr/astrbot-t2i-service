@@ -6,6 +6,115 @@
 
 HTML、URL、またはホストした静的サイトを画像に変換し、画像のライフサイクル管理をサポートするWebサービスです。
 
+## インストールと使用方法
+
+### 方法1：Docker Compose（推奨）
+
+DockerとDocker Compose v2をインストールしてから実行します。
+
+```bash
+git clone https://github.com/oculr/astrbot-t2i-service.git
+cd astrbot-t2i-service
+docker compose pull
+docker compose up -d
+```
+
+サービスは `http://localhost:8999` で待機します。対話型APIドキュメントは
+`http://localhost:8999/docs` です。
+
+状態とログを確認します。
+
+```bash
+docker compose ps
+docker compose logs -f astrbot-t2i-service
+```
+
+ドメインまたはリバースプロキシで公開する場合、プロジェクトディレクトリに `.env` を作成します。
+
+```env
+WEB_PUBLIC_URL_PREFIX=https://t2i.example.com
+```
+
+Composeはこの値を `docker-compose.yml` に展開します。その他の環境変数は必要に応じて
+Composeサービスの `environment` に追加し、`docker compose up -d` を再実行してください。
+
+### 方法2：Dockerイメージを直接実行
+
+```bash
+docker run -d \
+  --name astrbot-t2i-service \
+  --restart unless-stopped \
+  --init \
+  -p 8999:8999 \
+  -e WEB_PUBLIC_URL_PREFIX=http://localhost:8999 \
+  -v astrbot-t2i-data:/app/data \
+  ocul/astrbot-t2i-service:latest
+```
+
+本番環境では `latest` を固定Releaseタグに置き換え、`WEB_PUBLIC_URL_PREFIX` を
+実際に外部からアクセスできるURLへ設定してください。
+
+### 方法3：ソースから実行
+
+Python 3.11以降、Git、Chromiumのシステム依存関係が必要です。`uv` の利用を推奨します。
+
+```bash
+git clone https://github.com/oculr/astrbot-t2i-service.git
+cd astrbot-t2i-service
+uv sync
+uv run playwright install --with-deps chromium
+uv run python main.py
+```
+
+標準の仮想環境も使用できます。
+
+```bash
+python -m venv .venv
+# Linux/macOS: source .venv/bin/activate
+# Windows PowerShell: .venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+playwright install chromium
+python main.py
+```
+
+### クイック確認
+
+```bash
+curl http://localhost:8999/openapi.json
+```
+
+最初の画像を生成します。
+
+```bash
+curl -X POST http://localhost:8999/text2img/generate \
+  -H "Content-Type: application/json" \
+  -d '{"html":"<html><body><h1>Hello T2I</h1></body></html>"}' \
+  --output hello.png
+```
+
+Webページをキャプチャします。
+
+```bash
+curl -X POST http://localhost:8999/url2img/generate \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com"}' \
+  --output example.png
+```
+
+### 更新と停止
+
+```bash
+# 最新イメージへ更新
+docker compose pull
+docker compose up -d
+
+# データボリュームを保持してコンテナを削除
+docker compose down
+```
+
+ホストサイトとローカル画像は `t2i-data` ボリュームに保存されます。
+`docker compose down -v` はボリュームも削除し、復元できません。
+
 ## 環境変数設定
 
 - `PORT`: サービスポート、デフォルトは8999
