@@ -153,9 +153,114 @@ ZIP 和 Git 导入都会要求目标目录存在 `index.html`。成功响应示�
 
 ZIP 导入会阻止路径穿越、符号链接、加密条目和超限内容；Git URL 不允许内嵌凭据。
 
+### 网站管理
+
+所有管理操作统一使用：
+
+```text
+POST /websites/mgmt
+Content-Type: application/json
+```
+
+浏览站点只使用带尾斜杠的 `/websites/{id}/`，不再使用 `/websites/{id}` 承载管理语义。
+`{id}` 是导入接口返回的 32 位十六进制站点 ID。
+
+请求体字段：
+
+| 字段 | 必填条件 | 说明 |
+| --- | --- | --- |
+| `action` | 始终必填 | `list`、`get`、`delete` 或 `replace` |
+| `id` | `get`、`delete`、`replace` | 要查询、删除或保留的目标站点 ID |
+| `replacement_id` | `replace` | 已通过 Git/ZIP 导入的新站点 ID |
+
+#### 列举全部站点
+
+```bash
+curl -X POST https://t2i.example.com/websites/mgmt \
+  -H "Content-Type: application/json" \
+  -d '{"action":"list"}'
+```
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "items": [
+      {
+        "id": "0123456789abcdef0123456789abcdef",
+        "path": "/websites/0123456789abcdef0123456789abcdef/",
+        "url": "https://t2i.example.com/websites/0123456789abcdef0123456789abcdef/"
+      }
+    ],
+    "total": 1
+  }
+}
+```
+
+#### 查询单个站点
+
+```json
+{
+  "action": "get",
+  "id": "0123456789abcdef0123456789abcdef"
+}
+```
+
+成功响应中的 `data` 包含 `id`、`path`、`url`，不会暴露服务器磁盘路径或导入来源。
+
+#### 删除站点
+
+```json
+{
+  "action": "delete",
+  "id": "0123456789abcdef0123456789abcdef"
+}
+```
+
+删除会永久移除站点及全部静态文件，不可恢复，但不会删除以前生成的截图。
+
+#### 替换站点
+
+替换分为两步：
+
+1. 使用 `/websites/import/git` 或 `/websites/import/zip` 导入新版本，获得新的站点 ID。
+2. 将新 ID 作为 `replacement_id` 提交给管理接口。
+
+```json
+{
+  "action": "replace",
+  "id": "0123456789abcdef0123456789abcdef",
+  "replacement_id": "fedcba9876543210fedcba9876543210"
+}
+```
+
+其中 `id` 是需要保留 URL 的原站点，`replacement_id` 是新导入的站点。成功后：
+
+- 原站点的 ID、path、URL 不变，内容全部替换为新站点内容
+- `replacement_id` 被消费并删除，不再出现在 `list` 结果中
+- 新旧文件不会合并
+- 任一 ID 不存在或切换失败时，原站点保持可用
+
+`id` 与 `replacement_id` 不能相同。
+
+#### 管理接口状态码
+
+| HTTP 状态码 | 含义 |
+| --- | --- |
+| `200` | 列举、查询、替换或删除成功 |
+| `400` | 缺少 `id`/`replacement_id`，或两个 ID 相同 |
+| `404` | 目标站点或替换站点不存在 |
+| `422` | `action` 缺失、不受支持，或 JSON 字段类型不正确 |
+| `429` | 启用了请求限流且当前请求超过限制 |
+
+当前服务没有内置用户身份验证。将管理接口暴露给不可信网络时，应在反向代理或 API 网关层
+增加身份验证、授权、请求体大小限制和审计日志。
+
 ### GET /websites/{id}/{path}
 
-访问已托管的网站资源。目录默认返回 `index.html`；没有扩展名的未知路径会回退到
+访问已托管的网站资源。站点首页使用带尾斜杠的 `/websites/{id}/`。目录默认返回
+`index.html`；没有扩展名的未知路径会回退到
 根目录 `index.html`，支持前端 SPA 路由。
 
 前端构建产物应使用相对资源路径，或将构建 base 配置为返回的 `/websites/{id}/`。

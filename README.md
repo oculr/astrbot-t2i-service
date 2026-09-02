@@ -159,9 +159,89 @@ Both import methods require `index.html` in the selected directory. Example resp
 ZIP imports reject path traversal, symbolic links, encrypted entries, and content
 over the configured limits. Git URLs may not contain embedded credentials.
 
+### Website management
+
+All management operations use `POST /websites/mgmt` with a JSON body. Browsing only
+uses the trailing-slash `/websites/{id}/` URL, so `/websites/{id}` no longer has a
+separate management meaning.
+
+| Field | Required for | Description |
+| --- | --- | --- |
+| `action` | Always | `list`, `get`, `delete`, or `replace` |
+| `id` | `get`, `delete`, `replace` | Target site id |
+| `replacement_id` | `replace` | Newly imported replacement site id |
+
+#### List
+
+```json
+{"action":"list"}
+```
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "items": [
+      {
+        "id": "0123456789abcdef0123456789abcdef",
+        "path": "/websites/0123456789abcdef0123456789abcdef/",
+        "url": "https://t2i.example.com/websites/0123456789abcdef0123456789abcdef/"
+      }
+    ],
+    "total": 1
+  }
+}
+```
+
+#### Get
+
+```json
+{"action":"get","id":"0123456789abcdef0123456789abcdef"}
+```
+
+#### Delete
+
+```json
+{"action":"delete","id":"0123456789abcdef0123456789abcdef"}
+```
+
+Deletion permanently removes static files but does not remove previously generated images.
+
+#### Replace
+
+First import the new build through `/websites/import/git` or `/websites/import/zip`, then
+use the returned id as `replacement_id`:
+
+```json
+{
+  "action": "replace",
+  "id": "0123456789abcdef0123456789abcdef",
+  "replacement_id": "fedcba9876543210fedcba9876543210"
+}
+```
+
+The target id, path, and URL are preserved. The replacement id is consumed and removed.
+Files are not merged, and failures leave the original site available. The two ids must differ.
+
+#### Management status codes
+
+| HTTP status | Meaning |
+| --- | --- |
+| `200` | List, lookup, replacement, or deletion succeeded |
+| `400` | Required id fields are missing or both ids are equal |
+| `404` | The target or replacement site does not exist |
+| `422` | The action is missing/unsupported or JSON field types are invalid |
+| `429` | The configured request rate limit was exceeded |
+
+The service does not provide built-in user authentication. Protect management endpoints
+with authentication, authorization, body-size limits, and audit logging at a reverse proxy
+or API gateway when exposing them to an untrusted network.
+
 ### GET /websites/{id}/{path}
 
-Serve a hosted website. Directories resolve to `index.html`; extensionless missing
+Serve a hosted website. Use the trailing-slash `/websites/{id}/` for its homepage.
+Directories resolve to `index.html`; extensionless missing
 paths fall back to the root `index.html` for SPA routing.
 
 Build output should use relative asset paths or configure its base path to the

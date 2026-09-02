@@ -215,6 +215,7 @@ def test_hosted_website_generate_rejects_unsafe_path(monkeypatch):
 
 def test_hosted_website_routes_are_registered():
     paths = {route.path for route in api.app.routes}
+    assert "/websites/mgmt" in paths
     assert "/websites/import/git" in paths
     assert "/websites/import/zip" in paths
     assert "/websites/{site_id}/{file_path:path}" in paths

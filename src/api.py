@@ -4,12 +4,13 @@ import secrets
 import time
 from collections import deque
 from pathlib import PurePosixPath
+from typing import Literal
 from urllib.parse import quote, urlsplit
 
 import fastapi
 from fastapi import File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from jinja2.exceptions import SecurityError
 from loguru import logger
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -31,7 +32,12 @@ from .metrics import (
 from .render import ScreenshotOptions, Text2ImgRender
 from .storage import create_image_storage
 from .util import cleanup_expired_files
-from .websites import WebsiteImportError, WebsiteManager, WebsiteTooLargeError
+from .websites import (
+    WebsiteImportError,
+    WebsiteManager,
+    WebsiteNotFoundError,
+    WebsiteTooLargeError,
+)
 
 app = fastapi.FastAPI()
 app.add_middleware(
@@ -56,6 +62,8 @@ def metric_route(path: str) -> str:
     if path.startswith("/url2img/data/"):
         return "/url2img/data/{id}"
     if path in {"/websites/import/git", "/websites/import/zip"}:
+        return path
+    if path == "/websites/mgmt":
         return path
     if path.startswith("/websites/"):
         if path.endswith("/generate"):
@@ -125,6 +133,12 @@ class WebsiteGenerateRequest(BaseModel):
     path: str = ""
     options: ScreenshotOptions | None = None
     json: bool = False
+
+
+class WebsiteManagementRequest(BaseModel):
+    action: Literal["list", "get", "delete", "replace"]
+    id: str | None = None
+    replacement_id: str | None = None
 
 
 def default_screenshot_options() -> ScreenshotOptions:
@@ -199,22 +213,31 @@ async def image_response(
     )
 
 
-def website_response(site_id: str, request: fastapi.Request) -> JSONResponse:
+def website_data(site_id: str, request: fastapi.Request) -> dict[str, str]:
     path, url = website_manager.public_location(
         site_id,
         fallback_prefix=str(request.base_url).rstrip("/"),
     )
+    return {"id": site_id, "path": path, "url": url}
+
+
+def website_response(site_id: str, request: fastapi.Request) -> JSONResponse:
     return JSONResponse(
         content={
             "code": 0,
             "message": "success",
-            "data": {"id": site_id, "path": path, "url": url},
+            "data": website_data(site_id, request),
         }
     )
 
 
 def website_import_error(error: WebsiteImportError) -> JSONResponse:
-    status_code = 413 if isinstance(error, WebsiteTooLargeError) else 400
+    if isinstance(error, WebsiteNotFoundError):
+        status_code = 404
+    elif isinstance(error, WebsiteTooLargeError):
+        status_code = 413
+    else:
+        status_code = 400
     return JSONResponse(
         status_code=status_code,
         content={"code": 1, "message": str(error), "data": {}},
@@ -386,14 +409,72 @@ async def import_website_from_zip(
     return website_response(site.site_id, request)
 
 
-@app.get("/websites/{site_id}", include_in_schema=False)
-async def hosted_website_redirect(site_id: str):
-    if not website_manager.site_exists(site_id):
+@app.post("/websites/mgmt")
+async def manage_hosted_websites(
+    request: fastapi.Request,
+    payload: WebsiteManagementRequest,
+):
+    retry_after = await enforce_rate_limit()
+    if retry_after is not None:
+        RATE_LIMIT_REJECTIONS.inc()
         return JSONResponse(
-            status_code=404,
-            content={"code": 1, "message": "website not found", "data": {}},
+            status_code=429,
+            content={"code": 1, "message": "rate limit exceeded", "data": {}},
+            headers={"Retry-After": str(retry_after)},
         )
-    return RedirectResponse(url=f"/websites/{site_id}/")
+
+    if payload.action == "list":
+        sites = await asyncio.to_thread(website_manager.list_sites)
+        items = [website_data(site.site_id, request) for site in sites]
+        return JSONResponse(
+            content={
+                "code": 0,
+                "message": "success",
+                "data": {"items": items, "total": len(items)},
+            }
+        )
+
+    if not payload.id:
+        return JSONResponse(
+            status_code=400,
+            content={"code": 1, "message": "id is required", "data": {}},
+        )
+
+    if payload.action == "get":
+        if not website_manager.site_exists(payload.id):
+            return website_import_error(WebsiteNotFoundError("website not found"))
+        return website_response(payload.id, request)
+
+    if payload.action == "delete":
+        try:
+            await website_manager.delete_site(payload.id)
+        except WebsiteNotFoundError as error:
+            return website_import_error(error)
+        return JSONResponse(
+            content={
+                "code": 0,
+                "message": "success",
+                "data": {"id": payload.id},
+            }
+        )
+
+    if not payload.replacement_id:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "code": 1,
+                "message": "replacement_id is required",
+                "data": {},
+            },
+        )
+    try:
+        site = await website_manager.replace_site(
+            payload.id,
+            payload.replacement_id,
+        )
+    except WebsiteImportError as error:
+        return website_import_error(error)
+    return website_response(site.site_id, request)
 
 
 @app.get("/websites/{site_id}/")

@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import stat
+import threading
 import uuid
 import zipfile
 from dataclasses import dataclass
@@ -20,6 +21,10 @@ class WebsiteImportError(ValueError):
 
 
 class WebsiteTooLargeError(WebsiteImportError):
+    pass
+
+
+class WebsiteNotFoundError(WebsiteImportError):
     pass
 
 
@@ -61,6 +66,7 @@ class WebsiteManager:
         self.git_timeout_seconds = _positive_env_int(
             "WEB_GIT_TIMEOUT_SECONDS", 120
         )
+        self._mutation_lock = threading.RLock()
         self.root.mkdir(parents=True, exist_ok=True)
 
     def public_location(
@@ -74,6 +80,33 @@ class WebsiteManager:
 
     def site_exists(self, site_id: str) -> bool:
         return self._site_root(site_id) is not None
+
+    def get_site(self, site_id: str) -> HostedWebsite | None:
+        root = self._site_root(site_id)
+        return HostedWebsite(site_id=site_id, root=root) if root else None
+
+    def list_sites(self) -> list[HostedWebsite]:
+        sites = []
+        for entry in self.root.iterdir():
+            if (
+                entry.is_dir()
+                and self.SITE_ID_PATTERN.fullmatch(entry.name)
+                and (entry / "index.html").is_file()
+            ):
+                sites.append(HostedWebsite(site_id=entry.name, root=entry.resolve()))
+        return sorted(sites, key=lambda site: site.site_id)
+
+    async def delete_site(self, site_id: str) -> None:
+        await asyncio.to_thread(self._delete_site, site_id)
+
+    async def replace_site(
+        self, site_id: str, replacement_id: str
+    ) -> HostedWebsite:
+        return await asyncio.to_thread(
+            self._replace_site_from_existing,
+            site_id,
+            replacement_id,
+        )
 
     def resolve_file(self, site_id: str, file_path: str = "") -> Path | None:
         site_root = self._site_root(site_id)
@@ -227,16 +260,67 @@ class WebsiteManager:
 
         site_id = uuid.uuid4().hex
         destination = self.root / site_id
+        staging = self.root / f".publish-{uuid.uuid4().hex}"
         try:
             shutil.copytree(
                 source,
-                destination,
+                staging,
                 ignore=shutil.ignore_patterns(".git"),
             )
+            with self._mutation_lock:
+                staging.rename(destination)
         except Exception:
             self._remove_tree(destination)
             raise
+        finally:
+            self._remove_tree(staging)
         return HostedWebsite(site_id=site_id, root=destination)
+
+    def _replace_site_from_existing(
+        self, site_id: str, replacement_id: str
+    ) -> HostedWebsite:
+        if site_id == replacement_id:
+            raise WebsiteImportError("replacement website must be different")
+        token = uuid.uuid4().hex
+        staging = self.root / f".replacement-{token}"
+        backup = self.root / f".backup-{token}"
+        consumed = self.root / f".consumed-{token}"
+        try:
+            replacement = self._site_root(replacement_id)
+            if replacement is None:
+                raise WebsiteNotFoundError("replacement website not found")
+            shutil.copytree(
+                replacement,
+                staging,
+                ignore=shutil.ignore_patterns(".git"),
+            )
+            with self._mutation_lock:
+                destination = self._site_root(site_id)
+                if destination is None:
+                    raise WebsiteNotFoundError("website not found")
+                replacement = self._site_root(replacement_id)
+                if replacement is None:
+                    raise WebsiteNotFoundError("replacement website not found")
+                destination.rename(backup)
+                try:
+                    staging.rename(destination)
+                    replacement.rename(consumed)
+                except Exception:
+                    self._remove_tree(destination)
+                    backup.rename(destination)
+                    raise
+            self._remove_tree(backup)
+            self._remove_tree(consumed)
+            return HostedWebsite(site_id=site_id, root=self.root / site_id)
+        finally:
+            self._remove_tree(staging)
+
+    def _delete_site(self, site_id: str) -> None:
+        with self._mutation_lock:
+            root = self._site_root(site_id)
+            if root is None:
+                raise WebsiteNotFoundError("website not found")
+            self._remove_tree(root, suppress_errors=False)
 
     def _select_source(self, root: Path, subdirectory: str | None) -> Path:
         root = root.resolve()
@@ -302,7 +386,7 @@ class WebsiteManager:
             raise WebsiteImportError("repository URL must be a credential-free HTTP(S) URL")
 
     @staticmethod
-    def _remove_tree(path: Path) -> None:
+    def _remove_tree(path: Path, suppress_errors: bool = True) -> None:
         def make_writable(function, filename, _error_info):
             os.chmod(filename, stat.S_IWRITE)
             function(filename)
@@ -312,5 +396,5 @@ class WebsiteManager:
         try:
             shutil.rmtree(path, onerror=make_writable)
         except OSError:
-            # Cleanup must not replace the original import result or error.
-            pass
+            if not suppress_errors:
+                raise

@@ -11,6 +11,7 @@ from src import api
 from src.websites import (
     WebsiteImportError,
     WebsiteManager,
+    WebsiteNotFoundError,
     WebsiteTooLargeError,
 )
 
@@ -148,6 +149,101 @@ def test_git_import_rejects_embedded_credentials(tmp_path):
         )
 
 
+def test_list_replace_and_delete_site(tmp_path):
+    manager = WebsiteManager(tmp_path / "websites")
+    first = asyncio.run(
+        manager.import_zip(
+            UploadFile(
+                make_zip(
+                    {
+                        "index.html": b"old",
+                        "assets/old.js": b"old asset",
+                    }
+                ),
+                filename="old.zip",
+            )
+        )
+    )
+    second = asyncio.run(
+        manager.import_zip(
+            UploadFile(make_zip({"index.html": b"second"}), filename="second.zip")
+        )
+    )
+
+    assert [site.site_id for site in manager.list_sites()] == sorted(
+        [first.site_id, second.site_id]
+    )
+
+    replacement = asyncio.run(
+        manager.import_zip(
+            UploadFile(
+                make_zip(
+                    {
+                        "index.html": b"new",
+                        "assets/new.js": b"new asset",
+                    }
+                ),
+                filename="new.zip",
+            ),
+        )
+    )
+    replaced = asyncio.run(manager.replace_site(first.site_id, replacement.site_id))
+
+    assert replaced.site_id == first.site_id
+    assert manager.resolve_file(first.site_id).read_bytes() == b"new"
+    assert manager.resolve_file(first.site_id, "assets/new.js").is_file()
+    assert manager.resolve_file(first.site_id, "assets/old.js") is None
+    assert manager.get_site(replacement.site_id) is None
+    assert not list(manager.root.glob(".replacement-*"))
+    assert not list(manager.root.glob(".backup-*"))
+
+    asyncio.run(manager.delete_site(first.site_id))
+    assert manager.get_site(first.site_id) is None
+    assert [site.site_id for site in manager.list_sites()] == [second.site_id]
+    with pytest.raises(WebsiteNotFoundError):
+        asyncio.run(manager.delete_site(first.site_id))
+
+
+def test_replace_site_with_git_import_preserves_id(tmp_path, monkeypatch):
+    manager = WebsiteManager(tmp_path / "websites")
+    site = asyncio.run(
+        manager.import_zip(
+            UploadFile(make_zip({"index.html": b"old"}), filename="old.zip")
+        )
+    )
+
+    async def fake_clone(repository_url, destination, ref):
+        destination.mkdir(parents=True)
+        (destination / "index.html").write_bytes(b"from git")
+
+    monkeypatch.setattr(manager, "_clone_git", fake_clone)
+
+    replacement = asyncio.run(
+        manager.import_git(
+            "https://example.com/site.git",
+            ref="main",
+        )
+    )
+    replaced = asyncio.run(manager.replace_site(site.site_id, replacement.site_id))
+
+    assert replaced.site_id == site.site_id
+    assert manager.resolve_file(site.site_id).read_bytes() == b"from git"
+
+
+def test_missing_replacement_preserves_existing_site(tmp_path):
+    manager = WebsiteManager(tmp_path / "websites")
+    site = asyncio.run(
+        manager.import_zip(
+            UploadFile(make_zip({"index.html": b"original"}), filename="old.zip")
+        )
+    )
+
+    with pytest.raises(WebsiteNotFoundError, match="replacement"):
+        asyncio.run(manager.replace_site(site.site_id, "f" * 32))
+
+    assert manager.resolve_file(site.site_id).read_bytes() == b"original"
+
+
 def test_zip_import_and_static_hosting_end_to_end(tmp_path, monkeypatch):
     manager = WebsiteManager(tmp_path / "websites")
     monkeypatch.setattr(api, "website_manager", manager)
@@ -168,8 +264,69 @@ def test_zip_import_and_static_hosting_end_to_end(tmp_path, monkeypatch):
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["url"] == f"http://testserver{data['path']}"
+    no_slash = client.get(data["path"].rstrip("/"), follow_redirects=False)
+    assert no_slash.status_code == 307
+    assert no_slash.headers["location"] == data["url"]
+    assert client.post("/websites/mgmt", json={"action": "list"}).json()["data"] == {
+        "items": [data],
+        "total": 1,
+    }
+    assert client.post(
+        "/websites/mgmt",
+        json={"action": "get", "id": data["id"]},
+    ).json()["data"] == data
     assert client.get(data["path"]).text == "<html>hosted</html>"
     assert client.get(f"{data['path']}assets/app.css").headers[
         "content-type"
     ].startswith("text/css")
     assert client.get(f"{data['path']}dashboard").text == "<html>hosted</html>"
+
+    replacement = make_zip({"index.html": b"<html>replacement</html>"})
+    replacement_response = client.post(
+        "/websites/import/zip",
+        files={
+            "file": ("replacement.zip", replacement.getvalue(), "application/zip")
+        },
+    )
+    replacement_data = replacement_response.json()["data"]
+    replace_response = client.post(
+        "/websites/mgmt",
+        json={
+            "action": "replace",
+            "id": data["id"],
+            "replacement_id": replacement_data["id"],
+        },
+    )
+    assert replace_response.status_code == 200
+    assert replace_response.json()["data"] == data
+    assert client.get(data["path"]).text == "<html>replacement</html>"
+    missing_replacement = client.post(
+        "/websites/mgmt",
+        json={"action": "get", "id": replacement_data["id"]},
+    )
+    assert missing_replacement.status_code == 404
+
+    delete_response = client.post(
+        "/websites/mgmt",
+        json={"action": "delete", "id": data["id"]},
+    )
+    assert delete_response.status_code == 200
+    assert delete_response.json()["data"] == {"id": data["id"]}
+    assert client.get(data["path"]).status_code == 404
+    assert client.post("/websites/mgmt", json={"action": "list"}).json()[
+        "data"
+    ] == {"items": [], "total": 0}
+
+
+def test_management_request_validation():
+    client = TestClient(api.app)
+
+    missing_id = client.post("/websites/mgmt", json={"action": "get"})
+    unsupported_action = client.post(
+        "/websites/mgmt",
+        json={"action": "unknown"},
+    )
+
+    assert missing_id.status_code == 400
+    assert missing_id.json()["message"] == "id is required"
+    assert unsupported_action.status_code == 422

@@ -16,6 +16,7 @@ def test_metric_route_never_uses_image_ids():
     assert api.metric_route("/url2img/generate") == "/url2img/generate"
     assert api.metric_route("/url2img/data/image.png") == "/url2img/data/{id}"
     assert api.metric_route("/websites/import/zip") == "/websites/import/zip"
+    assert api.metric_route("/websites/mgmt") == "/websites/mgmt"
     assert api.metric_route("/websites/site-id/assets/app.js") == (
         "/websites/{id}/{path}"
     )
